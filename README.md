@@ -21,7 +21,7 @@ run.py：用于生成最终图像特征向量的执行脚本。
 
 （注：运行前请确保所需文件已正确放置）
 
-## 如何复现结果 (Reproduction Steps)
+## 如何复现结果 
 1. 验证代码正确性
 运行完整的测试流程，程序将逐层比对我们手写的 NumPy 输出与官方参考答案的误差：
 ```
@@ -39,3 +39,6 @@ python run.py --output output_tokens.npz
 ```
 python run.py --images path/to/your_image.jpg --output my_tokens.npz
 ```
+
+## 贡献说明
+本项目代码由本人参照课程PPT独立完成，AI辅助理解前向传播机制及报告填写。
