@@ -1,0 +1,189 @@
+"""Student implementation of the final project's image encoder.
+
+Complete TODO-01 through TODO-06 using NumPy. Model parameters are supplied.
+The public classes retain the final project's interface. helpers.py is provided.
+"""
+import numpy as np
+from helpers import LayerNorm, GELU, attention_weights, causal_mask, unit_vector
+
+
+class MultiHeadAttention:
+    def __init__(self, weights, prefix, heads):
+        self.qkv_weight = weights[prefix + '.in_proj_weight']  # [3D,D]
+        self.qkv_bias = weights[prefix + '.in_proj_bias']      # [3D]
+        self.out_weight = weights[prefix + '.out_proj.weight']  # [D,D]
+        self.out_bias = weights[prefix + '.out_proj.bias']
+        self.heads = heads
+        self.width = self.out_bias.shape[0]
+        self.head_dim = self.width // heads
+
+    def split_heads(self, x):
+        """TODO-02. Input [B,N,D], return [B,H,N,D/H].
+
+        In this image model D=768, H=12 and D/H=64. Use reshape/transpose.
+        Research the head organization independently. Preserve token order.
+        """
+        # TODO-02 contract: [B,N,D] to [B,H,N,D/H].
+        # Image model: D=768, H=12, D/H=64.
+        #先用reshape将768维拆分为12头，每头64维
+        #再用transpos将H前移，方便后面矩阵乘法计算相似度
+        B=x.shape[0]
+        N=x.shape[1]
+        x=x.reshape(B,N,12,64)
+        x=x.transpose(0,2,1,3)
+        return x
+        # raise NotImplementedError('TODO-02: split the feature axis into heads')
+
+    def __call__(self, x, causal=False):
+        # Given: stored linear weights use [out,in]. Parameters stay fixed.
+        qkv = x @ self.qkv_weight.T + self.qkv_bias
+        q = self.split_heads(qkv[:, :, :self.width])
+        k = self.split_heads(qkv[:, :, self.width:2*self.width])
+        v = self.split_heads(qkv[:, :, 2*self.width:])
+
+        # TODO-03a: query/key comparisons, scaled by sqrt(head_dim).
+        # q,k,v: [B,H,N,64]. scores must have [B,H,N,N].
+        #利用q，k计算相似度，因为k是四维，不能直接转置，要用transpose
+        #计算得到N个token的N*N矩阵相似度分数
+        #除以sqrt(head_dim)防止softmax输入过大
+        k_transpose=k.transpose(0,1,3,2)
+        scores=q @ k_transpose
+        scores/=8
+        # raise NotImplementedError('TODO-03a: calculate scores from q and k')
+
+        # Given for later text-encoder compatibility. Images use causal=False.
+        if causal:
+            scores = causal_mask(scores)
+        coefficients = attention_weights(scores)  # supplied numerical helper
+
+        # TODO-03b: mix value rows using coefficients; then join head outputs.
+        # context: [B,H,N,64], merged: [B,N,D].
+        #coefficients和v都是计算出来的矩阵，无需转置
+        #利用softmax得到的注意力权重@v计算出上下文
+        #最后transpose和reshape合并多头
+        context=coefficients @ v
+        B=context.shape[0]
+        N=context.shape[2]
+        merged=context.transpose(0,2,1,3)
+        merged=merged.reshape(B,N,768)
+        #raise NotImplementedError('TODO-03b: weighted values and merged heads')
+
+        # TODO-03c: output projection, using out_weight and out_bias.
+        # Return [B,N,D]. Remember the stored linear-weight orientation.
+        #@ self.out_weight.T将原先多头得到的特征混合
+        updated=merged @ self.out_weight.T + self.out_bias
+        return updated
+        #raise NotImplementedError('TODO-03c: project merged attention outputs')
+
+
+class TransformerBlock:
+    def __init__(self, weights, prefix, heads):
+        self.norm1 = LayerNorm(weights[prefix+'.ln_1.weight'], weights[prefix+'.ln_1.bias'])
+        self.norm2 = LayerNorm(weights[prefix+'.ln_2.weight'], weights[prefix+'.ln_2.bias'])
+        self.attention = MultiHeadAttention(weights, prefix+'.attn', heads)
+        self.fc1_weight = weights[prefix+'.mlp.c_fc.weight']  # [4D,D]
+        self.fc1_bias = weights[prefix+'.mlp.c_fc.bias']
+        self.fc2_weight = weights[prefix+'.mlp.c_proj.weight']  # [D,4D]
+        self.fc2_bias = weights[prefix+'.mlp.c_proj.bias']
+        self.gelu = GELU()
+
+    def __call__(self, x, causal=False):
+        # Given: normalize each token and calculate its attention update.
+        update = self.attention(self.norm1(x), causal=causal)
+
+        # TODO-04a: first residual addition. Name the result residual.
+        #残差连接解决网络退化和梯度消失（y=x+F(x)）
+        residual=x+update
+        #raise NotImplementedError('TODO-04a: add the attention update to x')
+
+        # Given: the second Norm and the exact checkpoint activation helper.
+        u = self.norm2(residual)
+
+        # TODO-04b: MLP = GELU(u @ W1.T + b1) @ W2.T + b2.
+        # hidden: [B,N,3072], mlp_update: [B,N,768] for the image tower.
+        # Return residual + mlp_update. Both residual paths retain [B,N,D].
+        #将residual层归一化得到u，@ self.fc1_weight.T后升维放大
+        #放大后gelu非线性激活
+        #然后@ self.fc2_weight.T降维压缩回原来的维度
+        #最后第二次残差连接
+        hidden=u @ self.fc1_weight.T + self.fc1_bias
+        activated=self.gelu(hidden)
+        mlp_update=activated @ self.fc2_weight.T + self.fc2_bias
+        output=residual + mlp_update
+        return output
+        #raise NotImplementedError('TODO-04b: MLP and the second residual')
+
+
+class ImageEncoder:
+    def __init__(self, weights):
+        self.patch_weight = weights['visual.conv1.weight'].reshape(768, 3072)
+        self.cls = weights['visual.class_embedding'].reshape(1, 1, 768)
+        self.position = weights['visual.positional_embedding']  # [50,768]
+        self.pre_norm = LayerNorm(weights['visual.ln_pre.weight'], weights['visual.ln_pre.bias'])
+        self.blocks = [TransformerBlock(weights, 'visual.transformer.resblocks.' + str(i), 12)
+                       for i in range(12)]
+        self.post_norm = LayerNorm(weights['visual.ln_post.weight'], weights['visual.ln_post.bias'])
+        self.projection = weights['visual.proj']  # [768,512], already [in,out]
+
+    def patchify(self, images):
+        """TODO-01. [B,3,224,224] -> [B,49,3072].
+
+        Visit patches left to right, then top to bottom. Within a patch, flatten
+        C,H,W in that order. Each 32x32 RGB patch contributes 3*32*32 values.
+        Use reshape/transpose. Do not resize the already-prepared input.
+        """
+        # TODO-01: separate patch-grid axes; reorder; flatten.
+        # Input [B,3,224,224], return [B,49,3072].
+        #切分并重新按顺序拼接图片
+        B=images.shape[0]
+        images=images.reshape(B,3,7,32,7,32)
+        images=images.transpose(0,2,4,1,3,5)
+        images=images.reshape(B,49,3072)
+        return images
+        #raise NotImplementedError('TODO-01: turn each image into 49 patch rows')
+
+    def embed(self, images):
+        patches = self.patchify(images)  # [B,49,3072]
+
+        # TODO-05a: project patches to [B,49,768]. There is no patch bias.
+        #@ self.patch_weight.T提取特征信息
+        patch_tokens=patches @ self.patch_weight.T
+        # raise NotImplementedError('TODO-05a: apply the supplied patch projection')
+
+        # Given: one supplied CLS row per image.
+        #tile将cls复制images.shape[0]（B）次，便于后续拼接
+        #不能用+，广播会将cls加进每个768维里，要用concatenate拼接
+        cls = np.tile(self.cls, (images.shape[0], 1, 1))
+        x=np.concatenate([cls,patch_tokens],axis=1)
+
+        # TODO-05b: prepend CLS on the token axis, then add learned positions.
+        # Return [B,50,768]. self.position broadcasts over B.
+        #添加位置信息
+        x+=self.position
+        return x
+        #raise NotImplementedError('TODO-05b: CLS, patch rows and positions')
+
+    def encode_tokens(self, images):
+        """Provided assembly of token input and the 12 blocks; [B,50,768]."""
+        x = self.pre_norm(self.embed(images))
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+    def __call__(self, images):
+        """TODO-06. Return one normalized output token [B,512] per image."""
+        tokens = self.encode_tokens(images)
+
+        # Select CLS, apply post_norm, and project with self.projection.
+        # [B,50,768] -> [B,768] -> [B,512]. visual.proj is already [in,out].
+        # Name the projected array output. The final unit-vector helper is given.
+        #提取代表整图的全局特征cls，层归一化
+        #@ self.projection，空间对齐，最后单位化
+        cls=tokens[:,0,:]
+        normalized_cls=self.post_norm(cls)
+        output=normalized_cls @ self.projection
+        output=unit_vector(output)
+        return output
+        #raise NotImplementedError('TODO-06: CLS selection, post-Norm and projection')
+
+        return unit_vector(output)
