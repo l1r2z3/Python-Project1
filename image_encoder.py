@@ -32,8 +32,7 @@ class MultiHeadAttention:
         x=x.reshape(B,N,12,64)
         x=x.transpose(0,2,1,3)
         return x
-        # raise NotImplementedError('TODO-02: split the feature axis into heads')
-
+        
     def __call__(self, x, causal=False):
         # Given: stored linear weights use [out,in]. Parameters stay fixed.
         qkv = x @ self.qkv_weight.T + self.qkv_bias
@@ -49,8 +48,7 @@ class MultiHeadAttention:
         k_transpose=k.transpose(0,1,3,2)
         scores=q @ k_transpose
         scores/=8
-        # raise NotImplementedError('TODO-03a: calculate scores from q and k')
-
+        
         # Given for later text-encoder compatibility. Images use causal=False.
         if causal:
             scores = causal_mask(scores)
@@ -66,15 +64,14 @@ class MultiHeadAttention:
         N=context.shape[2]
         merged=context.transpose(0,2,1,3)
         merged=merged.reshape(B,N,768)
-        #raise NotImplementedError('TODO-03b: weighted values and merged heads')
+        
 
         # TODO-03c: output projection, using out_weight and out_bias.
         # Return [B,N,D]. Remember the stored linear-weight orientation.
         #@ self.out_weight.T将原先多头得到的特征混合
         updated=merged @ self.out_weight.T + self.out_bias
         return updated
-        #raise NotImplementedError('TODO-03c: project merged attention outputs')
-
+        
 
 class TransformerBlock:
     def __init__(self, weights, prefix, heads):
@@ -94,8 +91,7 @@ class TransformerBlock:
         # TODO-04a: first residual addition. Name the result residual.
         #残差连接解决网络退化和梯度消失（y=x+F(x)）
         residual=x+update
-        #raise NotImplementedError('TODO-04a: add the attention update to x')
-
+        
         # Given: the second Norm and the exact checkpoint activation helper.
         u = self.norm2(residual)
 
@@ -111,7 +107,7 @@ class TransformerBlock:
         mlp_update=activated @ self.fc2_weight.T + self.fc2_bias
         output=residual + mlp_update
         return output
-        #raise NotImplementedError('TODO-04b: MLP and the second residual')
+        
 
 
 class ImageEncoder:
@@ -140,15 +136,14 @@ class ImageEncoder:
         images=images.transpose(0,2,4,1,3,5)
         images=images.reshape(B,49,3072)
         return images
-        #raise NotImplementedError('TODO-01: turn each image into 49 patch rows')
-
+        
     def embed(self, images):
         patches = self.patchify(images)  # [B,49,3072]
 
         # TODO-05a: project patches to [B,49,768]. There is no patch bias.
         #@ self.patch_weight.T提取特征信息
         patch_tokens=patches @ self.patch_weight.T
-        # raise NotImplementedError('TODO-05a: apply the supplied patch projection')
+        
 
         # Given: one supplied CLS row per image.
         #tile将cls复制images.shape[0]（B）次，便于后续拼接
@@ -161,7 +156,7 @@ class ImageEncoder:
         #添加位置信息
         x+=self.position
         return x
-        #raise NotImplementedError('TODO-05b: CLS, patch rows and positions')
+        
 
     def encode_tokens(self, images):
         """Provided assembly of token input and the 12 blocks; [B,50,768]."""
@@ -184,6 +179,6 @@ class ImageEncoder:
         output=normalized_cls @ self.projection
         output=unit_vector(output)
         return output
-        #raise NotImplementedError('TODO-06: CLS selection, post-Norm and projection')
+        
 
         return unit_vector(output)
